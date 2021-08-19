@@ -10,5 +10,6 @@ Gem::Specification.new name, KubernetesLeaderElection::VERSION do |s|
   s.homepage = "https://github.com/grosser/#{name}"
   s.files = `git ls-files lib/ bin/ MIT-LICENSE`.split("\n")
   s.license = "MIT"
-  s.required_ruby_version = ">= 2.5.0"
+  s.required_ruby_version = ">= 2.6.0"
+  s.add_runtime_dependency "kubeclient"
 end
