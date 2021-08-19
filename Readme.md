@@ -57,7 +57,7 @@ Usage
 Thread.abort_on_exception = true
 require "kubernetes_leader_election"
 
-kubeclient = KubeClient.new("#{url}/apis/coordination.k8s.io", "v1")
+kubeclient = Kubeclient.new("#{url}/apis/coordination.k8s.io", "v1")
 statsd = Datadog::Statsd.new
 logger = Logger.new STDOUT
 
