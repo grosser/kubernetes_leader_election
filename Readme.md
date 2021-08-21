@@ -10,10 +10,53 @@ similar to kubernetes go implementation:
 - https://github.com/kubernetes/client-go/blob/master/tools/leaderelection/leaderelection.go
 - https://github.com/kubernetes/client-go/blob/master/tools/leaderelection/resourcelock/leaselock.go
 
-Assumes that you use:
+Works best with:
 - statsd for metrics, for example [dogstatsd-ruby](https://github.com/DataDog/dogstatsd-ruby)
 - [kubeclient](https://github.com/abonas/kubeclient)
 - a logger that supports hashes as message
+
+Install
+=======
+
+```Bash
+gem install kubernetes_leader_election
+```
+
+Usage
+=====
+
+```Ruby
+Thread.abort_on_exception = true
+$stdout.sync = true
+require "logger"
+logger = Logger.new STDOUT
+
+# setup
+require "kubernetes_leader_election"
+origin = "https://#{ENV.fetch('KUBERNETES_SERVICE_HOST')}:#{ENV.fetch('KUBERNETES_SERVICE_PORT_HTTPS')}"
+kubeclient = Kubeclient::Client.new(
+  "#{origin}/apis/coordination.k8s.io",
+  "v1",
+  auth_options: {bearer_token_file: '/var/run/secrets/kubernetes.io/serviceaccount/token'},
+  ssl_options: {ca_file: '/var/run/secrets/kubernetes.io/serviceaccount/ca.crt'}
+)
+
+# wait for leader to be elected
+is_leader = false
+elector = KubernetesLeaderElection.new("my-app", kubeclient, logger: logger)
+Thread.new { elector.become_leader_for_life { is_leader = true } }
+sleep 1 until is_leader
+
+# do leader things
+puts "I'm the leader now"
+sleep
+```
+
+### Example
+
+see `example/` folder
+
+### RBAC
 
 Needs permissions:
 ```yaml
@@ -26,7 +69,7 @@ Needs permissions:
   verbs: ["get", "patch", "delete"]
 ```
 
-Needs env vars:
+### Env vars
 ```yaml
 - name: POD_NAME
   valueFrom:
@@ -40,33 +83,6 @@ Needs env vars:
   valueFrom:
     fieldRef:
       fieldPath: metadata.namespace
-```
-
-Install
-=======
-
-```Bash
-gem install kubernetes_leader_election
-```
-
-Usage
-=====
-
-```Ruby
-# wait for leader eletor to be elected
-Thread.abort_on_exception = true
-require "kubernetes_leader_election"
-
-kubeclient = Kubeclient.new("#{url}/apis/coordination.k8s.io", "v1")
-statsd = Datadog::Statsd.new
-logger = Logger.new STDOUT
-
-is_leader = false
-elector = KubernetesLeaderElection.new("my-app", kubeclient, statsd: statsd, logger: logger)
-Thread.new { elector.become_leader_for_life { is_leader = true } }
-sleep 1 until is_leader
-
-# ... things the leader would do goes here
 ```
 
 Author

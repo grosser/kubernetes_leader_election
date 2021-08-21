@@ -9,7 +9,7 @@ class KubernetesLeaderElection
   FAILED_KUBERNETES_REQUEST =
     [Timeout::Error, OpenSSL::SSL::SSLError, Kubeclient::HttpError, SystemCallError, HTTP::ConnectionError].freeze
 
-  def initialize(name, kubeclient, statsd:, logger:, interval: 30)
+  def initialize(name, kubeclient, logger:, statsd: nil, interval: 30)
     @name = name
     @kubeclient = kubeclient
     @statsd = statsd
@@ -26,7 +26,7 @@ class KubernetesLeaderElection
     end
     yield # signal we are leader, but keep reporting
     loop do
-      @statsd.increment('leader_running') # we monitor this to make sure it's always exactly 1
+      @statsd&.increment('leader_running') # we monitor this to make sure it's always exactly 1
       sleep @interval
       signal_alive
     end

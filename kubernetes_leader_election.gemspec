@@ -8,7 +8,7 @@ Gem::Specification.new name, KubernetesLeaderElection::VERSION do |s|
   s.authors = ["Michael Grosser"]
   s.email = "michael@grosser.it"
   s.homepage = "https://github.com/grosser/#{name}"
-  s.files = `git ls-files lib/ bin/ MIT-LICENSE`.split("\n")
+  s.files = Dir["lib/**/*.rb,MIT-LICENSE"]
   s.license = "MIT"
   s.required_ruby_version = ">= 2.6.0"
   s.add_runtime_dependency "kubeclient"
