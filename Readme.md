@@ -90,5 +90,5 @@ Author
 [Michael Grosser](http://grosser.it)<br/>
 michael@grosser.it<br/>
 License: MIT<br/>
-[![Build Status](https://travis-ci.org/grosser/kubernetes_leader_election.svg)](https://travis-ci.org/grosser/kubernetes_leader_election)
+[![CI](https://github.com/grosser/kubernetes_leader_election/actions/workflows/actions.yml/badge.svg)](https://github.com/grosser/kubernetes_leader_election/actions/workflows/actions.yml?query=branch%3Amaster)
 [![coverage](https://img.shields.io/badge/coverage-100%25-success.svg)](https://github.com/grosser/single_cov)
