@@ -4,29 +4,27 @@ require_relative "test_helper"
 SingleCov.covered!
 
 describe KubernetesLeaderElection do
-  it "has a VERSION" do
-    KubernetesLeaderElection::VERSION.must_match /^[.\da-z]+$/
-  end
-
   def stub_patch
-    stub_request(:patch, "https://kube.com/apis/coordination.k8s.io/v1/namespaces/baz/leases/foo")
-      .to_return(body: patch_reply.to_json)
+    stub_request(:patch, lease_url).to_return(body: patch_reply.to_json)
   end
 
   def stub_post
-    stub_request(:post, "https://kube.com/apis/coordination.k8s.io/v1/namespaces/baz/leases")
+    stub_request(:post, "#{url}/v1/namespaces/baz/leases")
   end
 
   def stub_delete
-    stub_request(
-      :delete,
-      "https://kube.com/apis/coordination.k8s.io/v1/namespaces/baz/leases/foo"
-    ).to_return(body: "{}")
+    stub_request(:delete, lease_url).to_return(body: "{}")
   end
 
   let(:patch_reply) { { metadata: { ownerReferences: [{ name: ENV.fetch("POD_NAME") }] } } }
-  let(:kubeclient) { Kubeclient::Client.new("https://kube.com/apis/coordination.k8s.io", "v1") }
+  let(:kubeclient) { Kubeclient::Client.new(url, "v1") }
   let(:statsd) { stub("Statsd", increment: true) }
+  let(:url) { "https://kube.com/apis/coordination.k8s.io" }
+  let(:lease_url) { "#{url}/v1/namespaces/baz/leases/foo" }
+
+  it "has a VERSION" do
+    KubernetesLeaderElection::VERSION.must_match /^[.\da-z]+$/
+  end
 
   describe "#call" do
     def call
@@ -51,7 +49,7 @@ describe KubernetesLeaderElection do
 
     it "stays leader when restarting" do
       stub_post.to_return(status: 409)
-      stub_request(:get, "https://kube.com/apis/coordination.k8s.io/v1/namespaces/baz/leases/foo")
+      stub_request(:get, lease_url)
         .to_return(body: { metadata: { ownerReferences: [{ name: ENV.fetch("POD_NAME") }] } }.to_json)
       stub_patch
       call { sleep 0.05 until @leader }
@@ -67,25 +65,32 @@ describe KubernetesLeaderElection do
 
     it "follows when there is a leader" do
       stub_post.to_return(status: 409)
-      stub_patch
-      stub_request(:get, "https://kube.com/apis/coordination.k8s.io/v1/namespaces/baz/leases/foo")
+      stub_request(:get, lease_url)
         .to_return(body: {
           metadata: { ownerReferences: [{ name: "other" }] },
           spec: { renewTime: Time.now }
         }.to_json)
+      stub_patch
       call { sleep 0.05 }
       refute @leader
     end
 
     it "deletes when leader is dead" do
       stub_post.to_return(status: 409)
-      stub_patch
-      stub_delete
-      stub_request(:get, "https://kube.com/apis/coordination.k8s.io/v1/namespaces/baz/leases/foo")
+      stub_request(:get, lease_url)
         .to_return(body: {
           metadata: { ownerReferences: [{ name: "other" }] },
           spec: { renewTime: (Time.now - 90) }
         }.to_json)
+      stub_delete
+      stub_patch
+      call { sleep 0.05 }
+      refute @leader
+    end
+
+    it "does not crash when leader was just deleted" do
+      stub_post.to_return(status: 409)
+      stub_request(:get, lease_url).to_return(status: 404)
       call { sleep 0.05 }
       refute @leader
     end

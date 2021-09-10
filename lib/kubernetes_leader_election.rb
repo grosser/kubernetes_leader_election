@@ -94,17 +94,24 @@ class KubernetesLeaderElection
 
     lease = with_retries(*FAILED_KUBERNETES_REQUEST, times: 3) do
       @kubeclient.get_entity("leases", @name, namespace)
+    rescue Kubeclient::ResourceNotFoundError
+      nil
     end
-    leader = lease.dig(:metadata, :ownerReferences, 0, :name)
-    if leader == ENV.fetch("POD_NAME")
+
+    if !lease
+      @logger.info message: "stale lease was deleted"
+      false
+    elsif lease.dig(:metadata, :ownerReferences, 0, :name) == ENV.fetch("POD_NAME")
       @logger.info message: "still leader"
       true # I restarted and am still the leader
     elsif !alive?(lease)
+      # this is still a race-condition since we could be deleting the newly succeeded leader
+      # see https://github.com/kubernetes/kubernetes/issues/20572
       @logger.info message: "deleting stale lease"
       with_retries(*FAILED_KUBERNETES_REQUEST, times: 3) do
         @kubeclient.delete_entity("leases", @name, namespace)
       end
-      false
+      false # leader is dead, do not assume leadership here to avoid race condition
     else
       false # leader is still alive ... not logging to avoid repetitive noise
     end

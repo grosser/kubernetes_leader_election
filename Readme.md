@@ -1,6 +1,7 @@
 Elect a kubernetes leader for life using leases for ruby.
 
-- elects a new leader when the old leader fails to update it's lease
+- elects a new leader when the old leader pod is deleted
+- elects a new leader when the old leader pod fails to update it's lease (see [race condition issue](https://github.com/kubernetes/kubernetes/issues/20572))
 - waits until the current pod is the leader, then continues reporting "I am the leader" metric
 - lease is a simple crd that does not do anything under the hood, except get GCed when the owning pod is deleted
 - leader continuously updates the lease to signal that it's healthy
