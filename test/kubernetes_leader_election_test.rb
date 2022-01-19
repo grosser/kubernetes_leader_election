@@ -3,6 +3,12 @@ require_relative "test_helper"
 
 SingleCov.covered!
 
+def assert_becomes_leader_if_there_is_no_leader
+  stub_post.to_return(body: { items: [{}] }.to_json)
+  stub_patch
+  call { sleep 0.05 until @leader }
+end
+
 describe KubernetesLeaderElection do
   def stub_patch
     stub_request(:patch, lease_url).to_return(body: patch_reply.to_json)
@@ -42,9 +48,7 @@ describe KubernetesLeaderElection do
     after { maxitest_kill_extra_threads }
 
     it "becomes leader when there is no leader" do
-      stub_post.to_return(body: { items: [{}] }.to_json)
-      stub_patch
-      call { sleep 0.05 until @leader }
+      assert_becomes_leader_if_there_is_no_leader
     end
 
     it "stays leader when restarting" do
@@ -115,6 +119,23 @@ describe KubernetesLeaderElection do
         call { sleep 0.05 }
       end
       assert_requested post, times: 4
+    end
+
+    describe "with a callback kubeclient" do
+      def kubeclient
+        client = super
+        -> do
+          called << 1
+          client
+        end
+      end
+
+      let(:called) { [] }
+
+      it "works" do
+        assert_becomes_leader_if_there_is_no_leader
+        called.size.must_equal 4
+      end
     end
   end
 

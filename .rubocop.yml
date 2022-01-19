@@ -56,3 +56,6 @@ Style/SpecialGlobalVars:
 
 Style/WordArray:
   EnforcedStyle: brackets
+
+Style/Lambda:
+  EnforcedStyle: literal

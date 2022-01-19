@@ -86,6 +86,16 @@ Needs permissions:
       fieldPath: metadata.namespace
 ```
 
+### BoundServiceAccountTokenVolume
+
+When using service account tokens from disk, then provide a method that builds a kubeclient instead of a kubeclient object.
+Ideally cache for <=1h so the token never expires.
+
+```ruby
+kubeclient = -> { cache.fetch(:kubclient) { Kubeclient.new(...) } }
+elector = KubernetesLeaderElection.new("my-app", kubeclient, logger: logger)
+```
+
 Author
 ======
 [Michael Grosser](http://grosser.it)<br/>

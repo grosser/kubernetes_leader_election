@@ -34,11 +34,17 @@ class KubernetesLeaderElection
 
   private
 
+  # allow callers to use any refresh tokens for their kubeclient
+  # see https://github.com/abonas/kubeclient/issues/530 for a better solution
+  def kubeclient
+    @kubeclient.respond_to?(:call) ? @kubeclient.call : @kubeclient
+  end
+
   # show that we are alive or crash because we cannot reach the api (split-brain az)
   def signal_alive
     with_retries(*FAILED_KUBERNETES_REQUEST, times: 3) do
       patch = { spec: { renewTime: microtime } }
-      reply = @kubeclient.patch_entity(
+      reply = kubeclient.patch_entity(
         "leases", @name, patch, 'strategic-merge-patch', ENV.fetch("POD_NAMESPACE")
       )
 
@@ -65,7 +71,7 @@ class KubernetesLeaderElection
     reraise = ->(e) { e.is_a?(Kubeclient::HttpError) && e.error_code == ALREADY_EXISTS_CODE }
 
     with_retries(*FAILED_KUBERNETES_REQUEST, reraise: reraise, times: 3) do
-      @kubeclient.create_entity(
+      kubeclient.create_entity(
         "Lease",
         "leases",
         metadata: {
@@ -93,7 +99,7 @@ class KubernetesLeaderElection
     raise e unless e.error_code == ALREADY_EXISTS_CODE # lease already exists
 
     lease = with_retries(*FAILED_KUBERNETES_REQUEST, times: 3) do
-      @kubeclient.get_entity("leases", @name, namespace)
+      kubeclient.get_entity("leases", @name, namespace)
     rescue Kubeclient::ResourceNotFoundError
       nil
     end
@@ -109,7 +115,7 @@ class KubernetesLeaderElection
       # see https://github.com/kubernetes/kubernetes/issues/20572
       @logger.info message: "deleting stale lease"
       with_retries(*FAILED_KUBERNETES_REQUEST, times: 3) do
-        @kubeclient.delete_entity("leases", @name, namespace)
+        kubeclient.delete_entity("leases", @name, namespace)
       end
       false # leader is dead, do not assume leadership here to avoid race condition
     else
