@@ -15,8 +15,6 @@ Works best with:
 - statsd for metrics, for example [dogstatsd-ruby]
 - [kubeclient](https://github.com/abonas/kubeclient)
 
-[dogstatsd-ruby]: https://github.com/DataDog/dogstatsd-ruby
-
 Install
 =======
 
@@ -56,15 +54,14 @@ sleep
 
 ### Configuration options
 
-The `KubernetesLeaderElection` object can be configured to suit your unique
-needs in a few ways. The default values should work for most people, but,
-when initializing the object, you can pass the following arguments:
+`KubernetesLeaderElection.new("my-app", kubeclient, options)`
 
-| Argument         | What it does                                                                                                                             | Default                            |
-| --------         | ------------                                                                                                                             | -------                            |
-| `statsd`         | Allows you to pass a StatsD client, e.g. [dogstatsd-ruby], for recording metrics about the leader                                        | `nil` (no StatsD metrics are sent) |
-| `interval`       | Sets the interval to refresh the Lease. The `leaseDurationSeconds` will be double this value.                                            | `30`                               |
-| `retry_backoffs` | If a request to the Kuberenetes API fails, it will be retried, with each element being the sleep interval between each successive retry. | `[0.1, 0.5, 1, 2, 4]`              |
+| Argument         | What it does                                                                  | Default                            |
+|------------------|-------------------------------------------------------------------------------|------------------------------------|
+| `statsd`         | StatsD client, e.g. [dogstatsd-ruby], for recording metrics about the leader  | `nil` (no StatsD metrics are sent) |
+| `interval`       | Lease refresh interval. The `leaseDurationSeconds` will be double this value. | `30`                               |
+| `retry_backoffs` | Kubernetes API retry delays in seconds.                                       | `[0.1, 0.5, 1, 2, 4]`              |
+| `logger`         | Logger to use.                                                                | No logging                         |
 
 ### Example
 
@@ -116,3 +113,5 @@ michael@grosser.it<br/>
 License: MIT<br/>
 [![CI](https://github.com/grosser/kubernetes_leader_election/actions/workflows/actions.yml/badge.svg)](https://github.com/grosser/kubernetes_leader_election/actions/workflows/actions.yml?query=branch%3Amaster)
 [![coverage](https://img.shields.io/badge/coverage-100%25-success.svg)](https://github.com/grosser/single_cov)
+
+[dogstatsd-ruby]: https://github.com/DataDog/dogstatsd-ruby
