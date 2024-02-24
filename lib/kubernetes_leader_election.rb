@@ -9,12 +9,13 @@ class KubernetesLeaderElection
   FAILED_KUBERNETES_REQUEST =
     [Timeout::Error, OpenSSL::SSL::SSLError, Kubeclient::HttpError, SystemCallError, HTTP::ConnectionError].freeze
 
-  def initialize(name, kubeclient, logger:, statsd: nil, interval: 30)
+  def initialize(name, kubeclient, logger:, statsd: nil, interval: 30, retry_backoffs: [0.1, 0.5, 1, 2, 4])
     @name = name
     @kubeclient = kubeclient
     @statsd = statsd
     @logger = logger
     @interval = interval
+    @retry_backoffs = retry_backoffs
   end
 
   # not using `call` since we never want to be restarted
@@ -42,7 +43,7 @@ class KubernetesLeaderElection
 
   # show that we are alive or crash because we cannot reach the api (split-brain az)
   def signal_alive
-    with_retries(*FAILED_KUBERNETES_REQUEST, times: 3) do
+    with_retries(*FAILED_KUBERNETES_REQUEST) do
       patch = { spec: { renewTime: microtime } }
       reply = kubeclient.patch_entity(
         "leases", @name, patch, 'strategic-merge-patch', ENV.fetch("POD_NAMESPACE")
@@ -70,7 +71,7 @@ class KubernetesLeaderElection
     # retry request on regular api errors
     reraise = ->(e) { e.is_a?(Kubeclient::HttpError) && e.error_code == ALREADY_EXISTS_CODE }
 
-    with_retries(*FAILED_KUBERNETES_REQUEST, reraise: reraise, times: 3) do
+    with_retries(*FAILED_KUBERNETES_REQUEST, reraise: reraise) do
       kubeclient.create_entity(
         "Lease",
         "leases",
@@ -98,7 +99,7 @@ class KubernetesLeaderElection
   rescue Kubeclient::HttpError => e
     raise e unless e.error_code == ALREADY_EXISTS_CODE # lease already exists
 
-    lease = with_retries(*FAILED_KUBERNETES_REQUEST, times: 3) do
+    lease = with_retries(*FAILED_KUBERNETES_REQUEST) do
       kubeclient.get_entity("leases", @name, namespace)
     rescue Kubeclient::ResourceNotFoundError
       nil
@@ -114,7 +115,7 @@ class KubernetesLeaderElection
       # this is still a race-condition since we could be deleting the newly succeeded leader
       # see https://github.com/kubernetes/kubernetes/issues/20572
       @logger.info message: "deleting stale lease"
-      with_retries(*FAILED_KUBERNETES_REQUEST, times: 3) do
+      with_retries(*FAILED_KUBERNETES_REQUEST) do
         kubeclient.delete_entity("leases", @name, namespace)
       end
       false # leader is dead, do not assume leadership here to avoid race condition
@@ -123,14 +124,14 @@ class KubernetesLeaderElection
     end
   end
 
-  def with_retries(*errors, times:, reraise: nil, backoff: [0.1, 0.5, 1])
+  def with_retries(*errors, times: @retry_backoffs.size, reraise: nil)
     yield
   rescue *errors => e
     retries ||= -1
     retries += 1
     raise if retries >= times || reraise&.call(e)
     @logger.warn message: "Retryable error", type: e.class.to_s, retries: times - retries
-    sleep backoff[retries] || backoff.last
+    sleep @retry_backoffs[retries] || @retry_backoffs.last
     retry
   end
 end
