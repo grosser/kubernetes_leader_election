@@ -33,10 +33,10 @@ describe KubernetesLeaderElection do
   end
 
   describe "#call" do
-    def call
+    def call(opts: {})
       t = Thread.new do
         t.report_on_exception = false # join will show exceptions
-        leader = KubernetesLeaderElection.new("foo", kubeclient, statsd: statsd, logger: logger)
+        leader = KubernetesLeaderElection.new("foo", kubeclient, statsd: statsd, logger: logger, **opts)
         leader.become_leader_for_life { @leader = true }
       end
       yield
@@ -100,25 +100,27 @@ describe KubernetesLeaderElection do
     end
 
     it "retries on connection errors" do
-      expect_log(:warn).times(2)
+      expect_log(:warn).times(4)
       post = stub_post.to_return(
+        { status: 500 },
+        { status: 500 },
         { status: 500 },
         { status: 500 },
         body: { items: [{}] }.to_json
       )
       stub_patch
       call { sleep 0.05 until @leader }
-      assert_requested post, times: 3
+      assert_requested post, times: 5
     end
 
     it "gives up on consistent connection errors" do
-      KubernetesLeaderElection.any_instance.expects(:sleep).times(3)
-      expect_log(:warn).times(3)
+      KubernetesLeaderElection.any_instance.expects(:sleep).times(1)
+      expect_log(:warn).times(1)
       post = stub_post.to_return(status: 500)
       assert_raises Kubeclient::HttpError do
-        call { sleep 0.05 }
+        call(opts: { retry_backoffs: [0.01] }) { sleep 0.05 }
       end
-      assert_requested post, times: 4
+      assert_requested post, times: 2
     end
 
     describe "with a callback kubeclient" do
@@ -193,15 +195,27 @@ describe KubernetesLeaderElection do
       calls.must_equal [1]
     end
 
-    it "uses backoff for retries" do
+    it "uses backoff for retries, repeating final backoff interval if more times are needed" do
       calls = []
-      client.expects(:sleep).with { |v| calls << v }.times(5)
-      expect_log :warn, times: 5
+      client.expects(:sleep).with { |v| calls << v }.times(6)
+      expect_log :warn, times: 6
       calls = []
       assert_raises ArgumentError do
-        client.send(:with_retries, ArgumentError, times: 5) { raise ArgumentError }
+        client.send(:with_retries, ArgumentError, times: 6) { raise ArgumentError }
       end
-      calls.must_equal [0.1, 0.5, 1, 1, 1]
+      calls.must_equal [0.1, 0.5, 1, 2, 4, 4]
+    end
+
+    it "allows backoffs to be customized" do
+      client = KubernetesLeaderElection.new nil, nil, statsd: nil, logger: logger, retry_backoffs: [0.1, 0.2]
+      calls = []
+      client.expects(:sleep).with { |v| calls << v }.times(4)
+      expect_log :warn, times: 4
+      calls = []
+      assert_raises ArgumentError do
+        client.send(:with_retries, ArgumentError, times: 4) { raise ArgumentError }
+      end
+      calls.must_equal [0.1, 0.2, 0.2, 0.2]
     end
   end
 end

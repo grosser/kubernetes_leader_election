@@ -12,9 +12,10 @@ similar to kubernetes go implementation:
 - https://github.com/kubernetes/client-go/blob/master/tools/leaderelection/resourcelock/leaselock.go
 
 Works best with:
-- statsd for metrics, for example [dogstatsd-ruby](https://github.com/DataDog/dogstatsd-ruby)
+- statsd for metrics, for example [dogstatsd-ruby]
 - [kubeclient](https://github.com/abonas/kubeclient)
-- a logger that supports hashes as message
+
+[dogstatsd-ruby]: https://github.com/DataDog/dogstatsd-ruby
 
 Install
 =======
@@ -52,6 +53,18 @@ sleep 1 until is_leader
 puts "I'm the leader now"
 sleep
 ```
+
+### Configuration options
+
+The `KubernetesLeaderElection` object can be configured to suit your unique
+needs in a few ways. The default values should work for most people, but,
+when initializing the object, you can pass the following arguments:
+
+| Argument         | What it does                                                                                                                             | Default                            |
+| --------         | ------------                                                                                                                             | -------                            |
+| `statsd`         | Allows you to pass a StatsD client, e.g. [dogstatsd-ruby], for recording metrics about the leader                                        | `nil` (no StatsD metrics are sent) |
+| `interval`       | Sets the interval to refresh the Lease. The `leaseDurationSeconds` will be double this value.                                            | `30`                               |
+| `retry_backoffs` | If a request to the Kuberenetes API fails, it will be retried, with each element being the sleep interval between each successive retry. | `[0.1, 0.5, 1, 2, 4]`              |
 
 ### Example
 
