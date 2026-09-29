@@ -64,7 +64,7 @@ class KubernetesLeaderElection
   end
 
   # everyone tries to create the same leases, who succeeds is the owner,
-  # leases is auto-deleted by GC when owner is deleted
+  # kubernetes never expires leases: they only disappear via ownerReference GC or the stale-delete below
   # same logic lives in kube-service-watcher & kube-stats
   def become_leader
     namespace = ENV.fetch("POD_NAMESPACE")

@@ -3,9 +3,15 @@ Elect a kubernetes leader for life using leases for ruby.
 - elects a new leader when the old leader pod is deleted
 - elects a new leader when the old leader pod fails to update it's lease (see [race condition issue](https://github.com/kubernetes/kubernetes/issues/20572))
 - waits until the current pod is the leader, then continues reporting "I am the leader" metric
-- lease is a simple crd that does not do anything under the hood, except get GCed when the owning pod is deleted
 - leader continuously updates the lease to signal that it's healthy
 - follower determines the leader is dead when lease is not updated (avoid az outage zombie pod issues)
+
+### How lease expiration works
+
+- kubernetes never deletes a lease when `leaseDurationSeconds` passes, the object sits around forever
+- "expired" is a client-side decision: `renewTime + leaseDurationSeconds < now` means the holder is considered dead
+- a lease only disappears via ownerReference GC (owning pod deleted) or explicit delete
+- so this gem deletes stale leases and retries create, "create until non-409" alone would never take over from a dead leader
 
 similar to kubernetes go implementation:
 - https://github.com/kubernetes/client-go/blob/master/tools/leaderelection/leaderelection.go
