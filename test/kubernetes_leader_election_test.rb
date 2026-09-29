@@ -4,6 +4,7 @@ require_relative "test_helper"
 SingleCov.covered!
 
 def assert_becomes_leader_if_there_is_no_leader
+  stub_get.to_return(status: 404)
   stub_post.to_return(body: { items: [{}] }.to_json)
   stub_patch
   call { sleep 0.05 until @leader }
@@ -14,15 +15,26 @@ describe KubernetesLeaderElection do
     stub_request(:patch, lease_url).to_return(body: patch_reply.to_json)
   end
 
+  def stub_get
+    stub_request(:get, lease_url)
+  end
+
   def stub_post
     stub_request(:post, "#{url}/v1/namespaces/baz/leases")
   end
 
-  def stub_delete
-    stub_request(:delete, lease_url).to_return(body: "{}")
+  def stub_put
+    stub_request(:put, lease_url)
   end
 
-  let(:patch_reply) { { metadata: { ownerReferences: [{ name: ENV.fetch("POD_NAME") }] } } }
+  def stale_lease
+    {
+      metadata: { resourceVersion: "1" },
+      spec: { holderIdentity: "other", renewTime: Time.now - 90, leaseDurationSeconds: 60, leaseTransitions: 2 }
+    }
+  end
+
+  let(:patch_reply) { { spec: { holderIdentity: ENV.fetch("POD_NAME") } } }
   let(:kubeclient) { Kubeclient::Client.new(url, "v1") }
   let(:statsd) { stub("Statsd", increment: true) }
   let(:url) { "https://kube.com/apis/coordination.k8s.io" }
@@ -52,75 +64,95 @@ describe KubernetesLeaderElection do
     end
 
     it "stays leader when restarting" do
-      stub_post.to_return(status: 409)
-      stub_request(:get, lease_url)
-        .to_return(body: { metadata: { ownerReferences: [{ name: ENV.fetch("POD_NAME") }] } }.to_json)
+      stub_get.to_return(body: { spec: { holderIdentity: ENV.fetch("POD_NAME") } }.to_json)
       stub_patch
       call { sleep 0.05 until @leader }
     end
 
     it "gives up when someone else took leadership" do
+      stub_get.to_return(status: 404)
       stub_post.to_return(body: { items: [{}] }.to_json)
-      patch_reply[:metadata][:ownerReferences][0][:name] = "other"
+      patch_reply[:spec][:holderIdentity] = "other"
       stub_patch
       e = assert_raises(RuntimeError) { call { sleep 0.05 } }
       e.message.must_equal "Lost leadership to other"
     end
 
     it "follows when there is a leader" do
-      stub_post.to_return(status: 409)
-      stub_request(:get, lease_url)
-        .to_return(body: {
-          metadata: { ownerReferences: [{ name: "other" }] },
-          spec: { renewTime: Time.now }
-        }.to_json)
-      stub_patch
+      stub_get.to_return(
+        body: {
+          spec: { holderIdentity: "other", renewTime: Time.now, leaseDurationSeconds: 60 }
+        }.to_json
+      )
       call { sleep 0.05 }
       refute @leader
     end
 
-    it "deletes when leader is dead" do
-      stub_post.to_return(status: 409)
-      stub_request(:get, lease_url)
-        .to_return(body: {
-          metadata: { ownerReferences: [{ name: "other" }] },
-          spec: { renewTime: (Time.now - 90) }
-        }.to_json)
-      stub_delete
+    it "takes over when leader is dead" do
+      stub_get.to_return(body: stale_lease.to_json)
+      stub_put.to_return(body: "{}")
       stub_patch
+      call { sleep 0.05 until @leader }
+      assert_requested :put, lease_url, body: /"holderIdentity":"bar".*"leaseTransitions":3/
+    end
+
+    it "does not become leader when loosing the takeover race" do
+      stub_get.to_return(body: stale_lease.to_json)
+      stub_put.to_return(status: 409)
       call { sleep 0.05 }
       refute @leader
     end
 
-    it "does not crash when leader was just deleted" do
+    it "does not become leader when loosing the create race" do
+      stub_get.to_return(status: 404)
       stub_post.to_return(status: 409)
-      stub_request(:get, lease_url).to_return(status: 404)
       call { sleep 0.05 }
       refute @leader
+    end
+
+    it "raises create errors that are not conflicts" do
+      KubernetesLeaderElection.any_instance.expects(:sleep).times(1)
+      expect_log(:warn).times(1)
+      stub_get.to_return(status: 404)
+      stub_post.to_return(status: 500)
+      assert_raises Kubeclient::HttpError do
+        call(opts: { retry_backoffs: [0.01] }) { sleep 0.05 }
+      end
+    end
+
+    it "raises update errors that are not conflicts" do
+      KubernetesLeaderElection.any_instance.expects(:sleep).times(1)
+      expect_log(:warn).times(1)
+      stub_get.to_return(body: stale_lease.to_json)
+      stub_put.to_return(status: 500)
+      assert_raises Kubeclient::HttpError do
+        call(opts: { retry_backoffs: [0.01] }) { sleep 0.05 }
+      end
     end
 
     it "retries on connection errors" do
       expect_log(:warn).times(4)
-      post = stub_post.to_return(
+      get = stub_get.to_return(
         { status: 500 },
         { status: 500 },
         { status: 500 },
         { status: 500 },
-        body: { items: [{}] }.to_json
+        status: 404
       )
+      stub_post.to_return(body: { items: [{}] }.to_json)
       stub_patch
       call { sleep 0.05 until @leader }
-      assert_requested post, times: 5
+      assert_requested get, times: 5
     end
 
     it "gives up on consistent connection errors" do
       KubernetesLeaderElection.any_instance.expects(:sleep).times(1)
       expect_log(:warn).times(1)
-      post = stub_post.to_return(status: 500)
+      get = stub_get.to_return(status: 500)
       assert_raises Kubeclient::HttpError do
         call(opts: { retry_backoffs: [0.01] }) { sleep 0.05 }
       end
-      assert_requested post, times: 2
+      assert_requested get, times: 2
     end
 
     describe "with a callback kubeclient" do
@@ -136,7 +168,7 @@ describe KubernetesLeaderElection do
 
       it "works" do
         assert_becomes_leader_if_there_is_no_leader
-        called.size.must_be_within_delta 4, 1 # TODO: randomly is 5 in CI more
+        called.size.must_be_within_delta 5, 1 # TODO: randomly is 6 in CI more
       end
     end
   end
