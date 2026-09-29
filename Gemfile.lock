@@ -1,7 +1,7 @@
 PATH
   remote: .
   specs:
-    kubernetes_leader_election (0.3.0)
+    kubernetes_leader_election (1.0.0)
       kubeclient
       ostruct
 
@@ -119,4 +119,4 @@ DEPENDENCIES
   webmock
 
 BUNDLED WITH
-   2.4.22
+  4.0.20
