@@ -12,4 +12,6 @@ Gem::Specification.new name, KubernetesLeaderElection::VERSION do |s|
   s.license = "MIT"
   s.required_ruby_version = ">= 2.7.0"
   s.add_runtime_dependency "kubeclient"
+  # kubeclient's recursive-open-struct 1.x requires ostruct without declaring it, ruby 4.0 removed it from default gems
+  s.add_runtime_dependency "ostruct"
 end

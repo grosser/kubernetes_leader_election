@@ -5,7 +5,7 @@ require 'timeout'
 require 'kubeclient'
 
 class KubernetesLeaderElection
-  ALREADY_EXISTS_CODE = 409
+  CONFLICT_CODE = 409
   FAILED_KUBERNETES_REQUEST =
     [Timeout::Error, OpenSSL::SSL::SSLError, Kubeclient::HttpError, SystemCallError, HTTP::ConnectionError].freeze
 
@@ -49,7 +49,7 @@ class KubernetesLeaderElection
         "leases", @name, patch, 'strategic-merge-patch', ENV.fetch("POD_NAMESPACE")
       )
 
-      current_leader = reply.dig(:metadata, :ownerReferences, 0, :name)
+      current_leader = reply.dig(:spec, :holderIdentity)
       raise "Lost leadership to #{current_leader}" if current_leader != ENV.fetch("POD_NAME")
     end
   end
@@ -59,45 +59,19 @@ class KubernetesLeaderElection
     Time.now.strftime('%FT%T.000000Z')
   end
 
+  # leader is considered dead when it failed to renew for leaseDurationSeconds
   def alive?(lease)
-    Time.parse(lease.dig(:spec, :renewTime)) > Time.now - (2 * @interval)
+    renew_time = Time.parse(lease.dig(:spec, :renewTime))
+    duration = lease.dig(:spec, :leaseDurationSeconds)
+    renew_time + duration > Time.now
   end
 
-  # everyone tries to create the same leases, who succeeds is the owner,
-  # leases is auto-deleted by GC when owner is deleted
-  # same logic lives in kube-service-watcher & kube-stats
+  # client-go style: read the lease, create it when missing, take it over via atomic update when the holder is dead
+  # see tryAcquireOrRenew https://github.com/kubernetes/client-go/blob/master/tools/leaderelection/leaderelection.go
+  # leases get GCed via ownerReferences when the owning pod is deleted
   def become_leader
     namespace = ENV.fetch("POD_NAMESPACE")
-    # retry request on regular api errors
-    reraise = ->(e) { e.is_a?(Kubeclient::HttpError) && e.error_code == ALREADY_EXISTS_CODE }
-
-    with_retries(*FAILED_KUBERNETES_REQUEST, reraise: reraise) do
-      kubeclient.create_entity(
-        "Lease",
-        "leases",
-        metadata: {
-          name: @name,
-          namespace: namespace,
-          ownerReferences: [{
-            apiVersion: "v1",
-            kind: "Pod",
-            name: ENV.fetch("POD_NAME"),
-            uid: ENV.fetch("POD_UID")
-          }]
-        },
-        spec: {
-          acquireTime: microtime,
-          holderIdentity: ENV.fetch("POD_NAME"), # shown in `kubectl get lease`
-          leaseDurationSeconds: @interval * 2,
-          leaseTransitions: 0, # will never change since we delete the lease
-          renewTime: microtime
-        }
-      )
-    end
-    @logger.info message: "became leader"
-    true # I'm the leader now
-  rescue Kubeclient::HttpError => e
-    raise e unless e.error_code == ALREADY_EXISTS_CODE # lease already exists
+    pod = ENV.fetch("POD_NAME")
 
     lease = with_retries(*FAILED_KUBERNETES_REQUEST) do
       kubeclient.get_entity("leases", @name, namespace)
@@ -106,22 +80,71 @@ class KubernetesLeaderElection
     end
 
     if !lease
-      @logger.info message: "stale lease was deleted"
-      false
-    elsif lease.dig(:metadata, :ownerReferences, 0, :name) == ENV.fetch("POD_NAME")
+      create_lease(namespace, pod)
+    elsif lease.dig(:spec, :holderIdentity) == pod
       @logger.info message: "still leader"
       true # I restarted and am still the leader
-    elsif !alive?(lease)
-      # this is still a race-condition since we could be deleting the newly succeeded leader
-      # see https://github.com/kubernetes/kubernetes/issues/20572
-      @logger.info message: "deleting stale lease"
-      with_retries(*FAILED_KUBERNETES_REQUEST) do
-        kubeclient.delete_entity("leases", @name, namespace)
-      end
-      false # leader is dead, do not assume leadership here to avoid race condition
-    else
+    elsif alive?(lease)
       false # leader is still alive ... not logging to avoid repetitive noise
+    else
+      acquire_lease(lease, namespace, pod)
     end
+  end
+
+  def create_lease(namespace, pod)
+    with_retries(*FAILED_KUBERNETES_REQUEST, reraise: ->(e) { conflict?(e) }) do
+      kubeclient.create_entity(
+        "Lease",
+        "leases",
+        metadata: { name: @name, namespace: namespace, ownerReferences: [pod_owner(pod)] },
+        spec: lease_spec(pod, 0)
+      )
+    end
+    @logger.info message: "became leader"
+    true # I'm the leader now
+  rescue Kubeclient::HttpError => e
+    raise e unless conflict?(e)
+    false # someone else created it first, next loop will follow or acquire
+  end
+
+  # update with resourceVersion so exactly one contender wins
+  def acquire_lease(lease, namespace, pod)
+    with_retries(*FAILED_KUBERNETES_REQUEST, reraise: ->(e) { conflict?(e) }) do
+      kubeclient.update_entity(
+        "leases",
+        metadata: {
+          name: @name,
+          namespace: namespace,
+          resourceVersion: lease.dig(:metadata, :resourceVersion),
+          ownerReferences: [pod_owner(pod)]
+        },
+        spec: lease_spec(pod, lease.dig(:spec, :leaseTransitions).to_i + 1)
+      )
+    end
+    @logger.info message: "became leader"
+    true
+  rescue Kubeclient::HttpError => e
+    raise e unless conflict?(e)
+    false # lost the race, next loop will follow or acquire
+  end
+
+  def lease_spec(pod, transitions)
+    now = microtime
+    {
+      acquireTime: now,
+      holderIdentity: pod, # shown in `kubectl get lease`
+      leaseDurationSeconds: @interval * 2,
+      leaseTransitions: transitions,
+      renewTime: now
+    }
+  end
+
+  def pod_owner(pod)
+    { apiVersion: "v1", kind: "Pod", name: pod, uid: ENV.fetch("POD_UID") }
+  end
+
+  def conflict?(error)
+    error.is_a?(Kubeclient::HttpError) && error.error_code == CONFLICT_CODE
   end
 
   def with_retries(*errors, times: @retry_backoffs.size, reraise: nil)

@@ -4,6 +4,7 @@ gemspec
 
 gem "bump"
 gem "rake"
+gem "logger" # removed from default gems in ruby 4.0
 gem "maxitest"
 gem "single_cov"
 gem "rubocop"
